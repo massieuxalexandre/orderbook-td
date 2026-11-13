@@ -1,22 +1,22 @@
 // ============================================================================
-// REFERENCE IMPLEMENTATION (Naive, for correctness comparison)
+// VEC IMPLEMENTATION
 // ============================================================================
 
 use crate::interfaces::{OrderBook, Price, Quantity, Side, Update};
-// use std::collections::BTreeMap;
 
 pub struct OrderBookImpl {
-    // bids: BTreeMap<Price, Quantity>,
+    // Les Bids sont triés de manière décroissante (Highest first)
     bids: Vec<(Price, Quantity)>,
-    // asks: BTreeMap<Price, Quantity>,
+    // Les Asks sont triés de manière croissante (Lowest first)
     asks: Vec<(Price, Quantity)>,
 }
 
 impl OrderBook for OrderBookImpl {
     fn new() -> Self {
         Self {
-            bids: Vec::new(),
-            asks: Vec::new(),
+            // Pré-allocation pour éviter les réallocations coûteuses
+            bids: Vec::with_capacity(1024),
+            asks: Vec::with_capacity(1024),
         }
     }
 
@@ -24,90 +24,88 @@ impl OrderBook for OrderBookImpl {
         match update {
             Update::Set { price, quantity, side } => {
                 if quantity == 0 {
-                    match side {
-                        // Side::Bid => self.bids.remove(&price),
-                        // Side::Ask => self.asks.remove(&price)
-                        Side::Bid => self.bids.retain(|&(p, _)| p != price),
-                        Side::Ask => self.asks.retain(|&(p, _)| p != price),
-                    };
+                    self.remove_level(price, side);
                 } else {
                     match side {
-                        // Side::Bid => self.bids.insert(price, quantity),
-                        // Side::Ask => self.asks.insert(price, quantity)
                         Side::Bid => {
-                            if let Some(pos) = self.bids.iter().position(|&(p, _)| p == price) {
-                                self.bids[pos] = (price, quantity);
-                            } else {
-                                self.bids.push((price, quantity));
+                            match self.bids.binary_search_by(|(p, _)| p.cmp(&price).reverse()) {
+                                Ok(idx) => self.bids[idx].1 = quantity, // Met à jour la quantité
+                                Err(idx) => self.bids.insert(idx, (price, quantity)), // Insère au bon endroit
                             }
                         }
                         Side::Ask => {
-                            if let Some(pos) = self.asks.iter().position(|&(p, _)| p == price) {
-                                self.asks[pos] = (price, quantity);
-                            } else {
-                                self.asks.push((price, quantity));
+                            match self.asks.binary_search_by(|(p, _)| p.cmp(&price)) {
+                                Ok(idx) => self.asks[idx].1 = quantity,
+                                Err(idx) => self.asks.insert(idx, (price, quantity)),
                             }
                         }
-                    };
+                    }
                 }
-            },
+            }
             Update::Remove { price, side } => {
-                match side {
-                    // Side::Bid => self.bids.remove(&price),
-                    // Side::Ask => self.asks.remove(&price)
-                    Side::Bid => self.bids.retain(|&(p, _)| p != price),
-                    Side::Ask => self.asks.retain(|&(p, _)| p != price),
-                };
+                self.remove_level(price, side);
             }
         };
     }
 
+    #[inline]
     fn get_spread(&self) -> Option<Price> {
         Some(self.get_best_ask()? - self.get_best_bid()?)
     }
 
+    #[inline]
     fn get_best_bid(&self) -> Option<Price> {
-        // self.bids.last_key_value().map(|(&price, _)| price)
-        self.bids.iter().max_by_key(|&&(price, _)| price).map(|&(price, _)| price)
+        self.bids.first().map(|(p, _)| *p)
     }
 
+    #[inline]
     fn get_best_ask(&self) -> Option<Price> {
-        // self.asks.first_key_value().map(|(&price, _)| price)
-        self.asks.iter().min_by_key(|&&(price, _)| price).map(|&(price, _)| price)
+        self.asks.first().map(|(p, _)| *p)
     }
 
     fn get_quantity_at(&self, price: Price, side: Side) -> Option<Quantity> {
         match side {
-            // Side::Bid => self.bids.get(&price).copied(),
-            // Side::Ask => self.asks.get(&price).copied()
-            Side::Bid => self.bids.iter().find(|&&(p, _)| p == price).map(|&(price, quantity)| quantity),
-            Side::Ask => self.asks.iter().find(|&&(p, _)| p == price).map(|&(price, quantity)| quantity),
+            Side::Bid => self.bids
+                .binary_search_by(|(p, _)| p.cmp(&price).reverse())
+                .ok()
+                .map(|idx| self.bids[idx].1),
+            Side::Ask => self.asks
+                .binary_search_by(|(p, _)| p.cmp(&price))
+                .ok()
+                .map(|idx| self.asks[idx].1),
         }
     }
 
     fn get_top_levels(&self, side: Side, n: usize) -> Vec<(Price, Quantity)> {
         match side {
-            // Side::Bid => self.bids.iter().rev().take(n).map(|(&price, &quantity)| (price, quantity)).collect(),
-            // Side::Ask => self.asks.iter().take(n).map(|(&price, &quantity)| (price, quantity)).collect(),
-            Side::Bid => {
-                let mut top_bids = self.bids.clone();
-                top_bids.sort_by_key(|&(price, _)| std::cmp::Reverse(price));
-                top_bids.into_iter().take(n).collect()
-            },
-            Side::Ask => {
-                let mut top_asks = self.asks.clone();
-                top_asks.sort_by_key(|&(price, _)| price);
-                top_asks.into_iter().take(n).collect()
-            },
+            Side::Bid => self.bids.iter().take(n).copied().collect(),
+            Side::Ask => self.asks.iter().take(n).copied().collect(),
         }
     }
 
     fn get_total_quantity(&self, side: Side) -> Quantity {
         match side {
-            // Side::Bid => self.bids.values().sum(),
-            // Side::Ask => self.asks.values().sum(),
-            Side::Bid => self.bids.iter().map(|&(_, quantity)| quantity).sum(),
-            Side::Ask => self.asks.iter().map(|&(_, quantity)| quantity).sum(),
+            Side::Bid => self.bids.iter().map(|(_, q)| q).sum(),
+            Side::Ask => self.asks.iter().map(|(_, q)| q).sum(),
+        }
+    }
+}
+
+// Méthode utilitaire pour garder apply_update propre
+impl OrderBookImpl {
+    #[inline]
+    fn remove_level(&mut self, price: Price, side: Side) {
+        match side {
+            Side::Bid => {
+                if let Ok(idx) = self.bids.binary_search_by(|(p, _)| p.cmp(&price).reverse()) {
+                    self.bids.remove(idx);
+                }
+            }
+            Side::Ask => {
+                if let Ok(idx) = self.asks.binary_search_by(|(p, _)| p.cmp(&price)) {
+                    self.asks.remove(idx);
+                }
+            }
         }
     }
 }
